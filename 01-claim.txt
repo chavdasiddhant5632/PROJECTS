@@ -1,0 +1,1 @@
+In a BDH-CQ-style test-time adapter solving an unseen ARC-AGI-style puzzle, wiping its fixed-size recurrent latent state right before the final query, while leaving every trained weight untouched, collapses held-out accuracy back toward chance, showing that its adaptation to that puzzle's demonstrations lives entirely in carried-forward state rather than in any parameter update.

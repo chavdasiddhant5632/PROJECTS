@@ -1,0 +1,146 @@
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+import seaborn as sns  
+
+#Loading the database
+
+df = pd.read_csv('F:\SIDDHANT CHAVDA\Data Analytics Study Material\AMERICAN EXPRESS PROJECT\campus_challenge_r1_data.csv')
+
+# 1. Identify all columns that need to be 0
+cols_to_zero = [
+    'f1', 'f2', 'f3', 'f4', 'f5', 'f6', 'f7', 'f8', 'f9', 'f10', 
+    'f12', 'f13', 'f14', 'f15', 'f16', 'f17', 'f18', 'f19', 'f20', 'f21', 'f22', 'f23'
+]
+
+# 2. Fill these with 0
+df[cols_to_zero] = df[cols_to_zero].fillna(0)
+
+# 3. Fill the Risk Score (f11) with the Median
+# We use median because it is not affected by outliers
+risk_median = df['f11'].median()
+df['f11'] = df['f11'].fillna(risk_median)
+
+#Function to Winsorize the column 
+
+def winsorize_column(df, column, percentile = 99):
+    upper_limit= df[column].quantile(percentile/100)
+    df[column]=np.where(df[column]>upper_limit,upper_limit,df[column])
+    return df
+
+cols_to_cap = ['f1', 'f5', 'f6', 'f7', 'f8', 'f9', 'f10']
+
+for col in cols_to_cap:
+    df = winsorize_column(df,col)
+    
+print(f"Maximum Spend before winsorization: {df['f5'].max()}")
+
+# Travel Spend (High Cost: 5x points)
+df['travel_spend'] = df['f6'] + df['f9']
+
+# Everyday Spend (Low Cost: 1x points)
+df['everyday_spend'] = df['f7'] + df['f8'] + df['f10']
+
+df['engagement_raw'] = df['f12'] + df['f22'] + df['f23']
+
+# Normalize between 0 and 1
+df['engagement_score'] = (df['engagement_raw'] - df['engagement_raw'].min()) / \
+                        (df['engagement_raw'].max() - df['engagement_raw'].min())
+
+# Risk exposure = Risk Score * Total Debt
+df['risk_exposure'] = df['f11'] * (df['f1'] + df['f18'])
+
+# Churn signal = General calls + (Collection calls * 3)
+df['churn_signal'] = (df['f2'] * 1) + (df['f3'] * 3)
+
+# 1. Revenues
+rev_discount = df['f5'] * 0.0224               # 2.24% of total spend
+rev_interest = df['f1'] * 0.112               # 11.2% on revolve balance
+rev_fee = 625                                  # Mid-point of $500-$750 fee
+
+# 2. Costs
+cost_travel_rewards = df['travel_spend'] * 0.075     # 5x points = ~7.5% cost
+cost_everyday_rewards = df['everyday_spend'] * 0.015 # 1x points = ~1.5% cost
+cost_lounge = df['f13'] * 40                          # Estimated $40 per visit
+cost_cabs = df['f15'] * 20                            # Estimated $20 per month used
+cost_digital = df['f16']                              # Direct amount already given
+
+# Calculate Gross Profit
+df['gross_profit'] = (rev_discount + rev_interest + rev_fee) - \
+                     (cost_travel_rewards + cost_everyday_rewards + cost_lounge + cost_cabs + cost_digital)
+# Expected Credit Loss (ECL) 
+# We use the 2.5% (0.025) average write-off rate provided in the extra info
+df['credit_loss'] = df['risk_exposure'] * 0.025
+
+# Calculate Net Profit
+df['net_profit'] = df['gross_profit'] - df['credit_loss']
+
+# Define a Loyalty Boost (max 20% increase)
+loyalty_boost = df['engagement_score'] * 0.20
+
+# Define a Churn Penalty (each signal reduces profit by 5%)
+churn_penalty = df['churn_signal'] * 0.05
+
+# Final Profitability Score
+# Formula: Net Profit * (1 + Boost - Penalty)
+df['final_profit_score'] = df['net_profit'] * (1 + loyalty_boost - churn_penalty)
+
+# --- FIXING THE RISK LAYER ---
+
+# Normalize the Risk Score (f11) 
+# We convert the risk score to a 0-1 scale so it acts as a probability
+df['risk_prob'] = (df['f11'] - df['f11'].min()) / (df['f11'].max() - df['f11'].min())
+
+# Recalculate Risk Exposure using the probability
+# Risk = Probability of Default * Total Exposure * Industry Write-off Rate
+df['credit_loss'] = df['risk_prob'] * (df['f1'] + df['f18']) * 0.025
+
+# Recalculate Net Profit
+df['net_profit'] = df['gross_profit'] - df['credit_loss']
+
+#Re-apply the Final Score (Multiplier)
+df['final_profit_score'] = df['net_profit'] * (1 + loyalty_boost - churn_penalty)
+
+
+# 1. Sort the dataframe by the final score in descending order (highest profit first)
+df_sorted = df.sort_values(by='final_profit_score', ascending=False)
+
+# 2. Calculate how many rows represent 20%
+top_20_count = int(len(df) * 0.20)
+
+# 3. Create a new dataframe containing ONLY the top 20%
+df_top_20 = df_sorted.head(top_20_count)
+
+# 4. Print the first 10 people of the top 20% to verify they are the most profitable
+print("--- Top 10 Most Profitable Customers ---")
+print(df_top_20[['id', 'final_profit_score']].head(10))
+
+# 5. Print the stats of the top 20% to see the range of profit
+print("\n--- Statistics for the Top 20% ---")
+print(f"Total Customers in Top 20%: {len(df_top_20)}")
+print(f"Highest Profit Score: {df_top_20['final_profit_score'].max():.2f}")
+print(f"Lowest Profit Score in Top 20%: {df_top_20['final_profit_score'].min():.2f}")
+
+
+# Make sure you are using the dataframe that has the final results
+# and is in the correct order.
+
+# 1. Create the submission dataframe
+submission_df = pd.DataFrame({
+    'ID': df['id'], 
+    'Prediction': df['final_profit_score']
+})
+
+# 2. Save as a REAL .xlsx file
+# index=False is crucial so you don't add an extra column at the start
+submission_df.to_excel('Amex_Final_Submission.xlsx', index=False, engine='openpyxl')
+
+print("Genuine Excel file created successfully!")
+
+
+
+
+
+
+
+
